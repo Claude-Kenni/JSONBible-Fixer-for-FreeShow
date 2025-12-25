@@ -55,7 +55,8 @@ The script expects the following structure **outside** the project root:
 
 ```text
 your-folder/
-├─ fixJsonBible.mjs
+├─ JSONBible-Fixer-for-FreeShow/
+│  └─ fixJsonBible.mjs
 ├─ Converted/
 │  ├─ Bible1.json
 │  ├─ Bible2.json
