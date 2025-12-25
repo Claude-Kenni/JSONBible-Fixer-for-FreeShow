@@ -1,4 +1,4 @@
-# JSONBible-Fixer-for-FreeShow
+# JSONBible Fixer for FreeShow
 A small Node.js utility to **detect and fix empty or missing verse ranges** in JSON Bibles that follow the [JSON Bible Format](https://github.com/ChurchApps/json-bible).
 
 This tool was created to help users of **[FreeShow](https://github.com/ChurchApps/FreeShow)** who encounter issues with Bible verses that are split across multiple verse numbers (e.g. `Genesis 1:17–18 ASD`, `Genesis 5:22–24 ASD`) but appear as empty or missing verses in JSON files.
