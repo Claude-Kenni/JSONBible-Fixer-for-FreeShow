@@ -114,6 +114,22 @@ function processVerses(verses, context, log) {
 const inputDir = path.resolve("../Converted");
 const outputDir = path.resolve("../Fixed");
 
+//Missing input directory
+if (!fs.existsSync(inputDir)) {
+  const msg = `❌ Input folder not found: ${inputDir}
+👉 Please create a "Converted" folder and place JSON Bible files inside it.`;
+
+  console.error(msg);
+  if (WRITE_LOG) {
+    fs.writeFileSync(
+      `fix-log-${getTimestamp()}.txt`,
+      msg,
+      "utf8"
+    );
+  }
+  process.exit(1);
+}
+
 if (!DRY_RUN) {
   fs.mkdirSync(outputDir, { recursive: true });
 }
@@ -143,8 +159,20 @@ console.log(modeMessage + "\n");
 writeLog(modeMessage);
 writeLog("");
 
+const files = fs.readdirSync(inputDir).filter(f => f.endsWith(".json"));
 
-for (const file of fs.readdirSync(inputDir)) {
+if (files.length === 0) {
+  const msg = `⚠️ No JSON Bible files found in "${inputDir}"
+👉 Make sure your converted Bibles are placed in the "Converted" directory.`;
+
+  console.warn(msg);
+  writeLog(msg);
+
+  console.log("\nNothing to process. Exiting.\n");
+  process.exit(0);
+}
+
+for (const file of files) {
   if (!file.endsWith(".json")) continue;
 
   const filePath = path.join(inputDir, file);
