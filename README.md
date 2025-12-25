@@ -42,7 +42,7 @@ If you **do NOT have JSON Bibles yet**, you will need to convert .xml bibles fir
 
 1.  Download or clone this repository
     
-2.  Place `fixJsonBible.js` anywhere you want (for example, your project root)
+2.  Place `fixJsonBible.mjs` anywhere you want (for example, your project root)
     
 
 No npm install required — this script uses only built-in Node.js modules.
@@ -55,7 +55,7 @@ The script expects the following structure **outside** the project root:
 
 ```text
 your-folder/
-├─ fixJsonBible.js
+├─ fixJsonBible.mjs
 ├─ Converted/
 │  ├─ Bible1.json
 │  ├─ Bible2.json
@@ -75,31 +75,31 @@ your-folder/
 Basic usage:
 
 ```bash
-node fixJsonBible.js
+node fixJsonBible.mjs
 ```
 
 Dry run (no files written):
 
 ```bash
-node fixJsonBible.js --dry-run
+node fixJsonBible.mjs --dry-run
 ```
 
 Pretty-printed JSON output:
 
 ```bash
-node fixJsonBible.js --pretty
+node fixJsonBible.mjs --pretty
 ```
 
 Write logs to a timestamped `.txt` file:
 
 ```bash
-node fixJsonBible.js --log
+node fixJsonBible.mjs --log
 ```
 
 Combine flags:
 
 ```bash
-node fixJsonBible.js --dry-run --pretty --log
+node fixJsonBible.mjs --dry-run --pretty --log
 ```
 
 * * *
