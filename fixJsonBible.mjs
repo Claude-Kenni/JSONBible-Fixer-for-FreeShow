@@ -1,103 +1,192 @@
-// scripts/fixJsonBible.js
 import fs from "fs";
 import path from "path";
 
+// ===== Configuration & Arguments =====
 const args = process.argv.slice(2);
 
-const DRY_RUN =args.includes("--dry-run");
-const PRETTY =args.includes("--pretty");
-const WRITE_LOG = args.includes("--log");
+const FLAGS = {
+  DRY_RUN: args.includes("--dry-run"),
+  WRITE_LOG: args.includes("--log"),
+  HELP: args.includes("--help") || args.includes("-h")
+};
 
-const VALID_FLAGS = new Set([
-  "--dry-run",
-  "--pretty",
-  "--log",
-  "--help",
-  "-h"
-]);
+// Paths
+const INPUT_DIR = path.resolve("../Converted");
+const OUTPUT_DIR = path.resolve("../Fixed");
+const LOGS_DIR = path.resolve("./logs"); // Centralized logs folder
 
-
+// ===== Help Menu =====
 function showHelp(error) {
-  if (error) {
-    console.error(`❌ ${error}\n`);
-  }
-
+  if (error) console.error(`❌ Error: ${error}\n`);
   console.log(`
-📖 JSON Bible Fixer for FreeShow
+📖 JSON/FSB Bible Fixer for FreeShow
 
 Usage:
   node fixJsonBible.js [options]
 
 Options:
-  --log           Write a log file (fix-log.txt)
-  --dry-run       Analyze files without writing output
-  --pretty        Write formatted (pretty-printed) JSON
-  --help, -h      Show this help message
-
-Examples:
-  node fixJsonBible.js
-  node fixJsonBible.js --dry-run
-  node fixJsonBible.js --pretty
-  node fixJsonBible.js --dry-run --pretty
+  --log        Write a log file (in ./logs/)
+  --dry-run    Analyze files without writing output
+  --help, -h   Show this help message
 
 Notes:
-  • The script only outputs Bibles that actually need fixing
-  • Always recheck affected verses using the original/reference Bible
-  • Logs include detected empty/missing verses per Bible
-
+  • Output is always compact (minified) JSON to save space.
+  • The script only outputs Bibles that actually need fixing.
 `);
 }
 
+// ===== 🛡️ Argument Validation =====
+const ALLOWED_FLAGS = ["--dry-run", "--log", "--help", "-h"];
+
 for (const arg of args) {
-  if (!VALID_FLAGS.has(arg)) {
-    showHelp(`Unknown flag: ${arg}`);
+  // If it looks like a flag (starts with -) but isn't allowed
+  if (arg.startsWith("-") && !ALLOWED_FLAGS.includes(arg)) {
+    showHelp(`Unknown argument: "${arg}"`);
     process.exit(1);
   }
 }
 
-if (args.includes("--help") || args.includes("-h")) {
+if (FLAGS.HELP) {
   showHelp();
   process.exit(0);
 }
 
-function processVerses(verses, context, log) {
+// ===== 📝 Logging System (DRY Principle) =====
+
+const logLines = [];
+const timestamp = () => new Date().toISOString().replace(/[:.]/g, "-");
+const logFilePath = path.join(LOGS_DIR, `fix-log-${timestamp()}.txt`);
+
+function writeLog(line) {
+  if (FLAGS.WRITE_LOG) logLines.push(line);
+}
+
+function logMessage(msg, level = "info") {
+  // Console output
+  switch (level) {
+    case "warn": console.warn(msg); break;
+    case "error": console.error(msg); break;
+    default: console.log(msg);
+  }
+  // File buffer
+  writeLog(msg);
+}
+
+function flushLogs() {
+  if (FLAGS.WRITE_LOG && logLines.length) {
+    if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
+    fs.writeFileSync(logFilePath, logLines.join("\n") + "\n", "utf8");
+    console.log(`\n📝 Log written to ${logFilePath}`);
+  }
+}
+
+// ===== 📂 File Handling System =====
+
+// Validate Input
+if (!fs.existsSync(INPUT_DIR)) {
+  logMessage(`❌ Input folder not found: ${INPUT_DIR}`, "error");
+  logMessage(`👉 Please create "Converted" folder or check path.`, "warn");
+  process.exit(1);
+}
+
+// Prepare Output
+if (!FLAGS.DRY_RUN && !fs.existsSync(OUTPUT_DIR)) {
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+}
+
+// Get Files
+const inputFiles = fs.readdirSync(INPUT_DIR).filter(f => f.endsWith(".json") || f.endsWith(".fsb"));
+
+if (!inputFiles.length) {
+  logMessage(`⚠️ No JSON or FSB files found in "${INPUT_DIR}"`, "warn");
+  process.exit(0);
+}
+
+/**
+ * Reads a file and determines if it is a standard JSON object 
+ * or an FSB structure (Array: [ID, Data]).
+ */
+function readBibleFile(filePath) {
+  const content = fs.readFileSync(filePath, "utf8");
+  let raw;
+  try {
+    raw = JSON.parse(content);
+  } catch (e) {
+    throw new Error(`Invalid JSON syntax`);
+  }
+
+  // ROBUST DETECTION:
+  const isFsbStructure = Array.isArray(raw) && 
+                         raw.length === 2 && 
+                         typeof raw[0] === "string" && 
+                         typeof raw[1] === "object" &&
+                         raw[1] !== null;
+
+  if (isFsbStructure) {
+    return { type: "fsb", id: raw[0], data: raw[1] };
+  } else if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    return { type: "json", id: null, data: raw };
+  } else {
+    throw new Error(`Unknown structure. Expected {object} or ["id", {object}].`);
+  }
+}
+
+/**
+ * Writes the file back to disk, preserving the original structure (JSON vs FSB).
+ * Always writes in COMPACT format.
+ */
+function writeBibleFile(filePath, bibleWrapper) {
+  let outputData;
+  
+  // Reconstruct FSB array if necessary
+  if (bibleWrapper.type === "fsb") {
+    outputData = [bibleWrapper.id, bibleWrapper.data];
+  } else {
+    outputData = bibleWrapper.data;
+  }
+
+  // Always compact
+  const jsonString = JSON.stringify(outputData);
+
+  fs.writeFileSync(filePath, jsonString, "utf8");
+}
+
+// ===== 🧠 Logic: Bible Fixing =====
+
+function processVerses(verses, context, verseLog) {
   const result = [];
   let lastVerse = null;
   let expectedNumber = null;
   let fixed = false;
 
   for (const v of verses) {
-    if (expectedNumber === null) {
-      expectedNumber = v.number;
-    }
+    if (expectedNumber === null) expectedNumber = v.number;
 
-    // 🔍 Missing verse numbers
+    // 🔍 Missing verse numbers (Gaps)
     if (v.number > expectedNumber && lastVerse) {
       fixed = true;
-      lastVerse.endNumber = v.number - 1;
+      lastVerse.endNumber = v.number - 1; // Extend previous verse to cover gap
 
-      log.push({
+      verseLog.push({
         type: "missing",
         start: expectedNumber,
         end: v.number - 1,
         context
       });
-
     }
 
     // 🔍 Empty verse text
     if (!v.text || v.text.trim() === "") {
       if (lastVerse) {
         fixed = true;
-        lastVerse.endNumber = v.number;
+        lastVerse.endNumber = v.number; // Merge into previous verse
 
-        log.push({
+        verseLog.push({
           type: "empty",
           start: v.number,
           end: v.number,
           context
         });
-
       }
     } else {
       result.push(v);
@@ -110,195 +199,97 @@ function processVerses(verses, context, log) {
   return { verses: result, fixed };
 }
 
-// ===== Paths =====
-const inputDir = path.resolve("../Converted");
-const outputDir = path.resolve("../Fixed");
+function logGroupedErrors(verseLog) {
+  const grouped = [];
 
-//Missing input directory
-if (!fs.existsSync(inputDir)) {
-  const msg = `❌ Input folder not found: ${inputDir}
-👉 Please create a "Converted" folder and place JSON Bible files inside it.`;
-
-  console.error(msg);
-  if (WRITE_LOG) {
-    fs.writeFileSync(
-      `fix-log-${getTimestamp()}.txt`,
-      msg,
-      "utf8"
-    );
+  // Group consecutive errors
+  for (const entry of verseLog) {
+    const last = grouped[grouped.length - 1];
+    if (last && last.type === entry.type && last.context === entry.context && last.end + 1 === entry.start) {
+      last.end = entry.end; // Extend range
+    } else {
+      grouped.push({ ...entry });
+    }
   }
-  process.exit(1);
+
+  // Print errors
+  for (const g of grouped) {
+    const label = g.type === "empty" ? "Empty verse" : "Missing verses";
+    const range = g.start === g.end ? g.start : `${g.start}-${g.end}`;
+    logMessage(`   📌 ${label} ${range} at ${g.context}`);
+  }
 }
 
-if (!DRY_RUN) {
-  fs.mkdirSync(outputDir, { recursive: true });
-}
+// ===== 🚀 Main Execution =====
+
+logMessage(`📂 Input:  ${INPUT_DIR}`);
+logMessage(`📂 Output: ${OUTPUT_DIR}`);
+logMessage(FLAGS.DRY_RUN 
+  ? "🧪 DRY-RUN MODE: No files will be written.\n" 
+  : "🛠  Fix mode enabled. Writing output files (Compact).\n");
 
 let fixedCount = 0;
 let invalidCount = 0;
 
-const logLines = [];
-function getTimestamp() {
-  const d = new Date();
-  return d.toISOString().replace(/[:.]/g, "-");
-}
+for (const file of inputFiles) {
+  const filePath = path.join(INPUT_DIR, file);
+  let bibleWrapper;
 
-const logFilePath = path.resolve(`fix-log-${getTimestamp()}.txt`);
-
-function writeLog(line) {
-  if (!WRITE_LOG) return;
-  logLines.push(line);
-}
-
-
-const modeMessage = DRY_RUN
-  ? "🧪 DRY-RUN MODE: No files will be written."
-  : "🛠 Fix mode enabled. Writing output files.";
-
-console.log(modeMessage + "\n");
-writeLog(modeMessage);
-writeLog("");
-
-const files = fs.readdirSync(inputDir).filter(f => f.endsWith(".json"));
-
-if (files.length === 0) {
-  const msg = `⚠️ No JSON Bible files found in "${inputDir}"
-👉 Make sure your converted Bibles are placed in the "Converted" directory.`;
-
-  console.warn(msg);
-  writeLog(msg);
-
-  console.log("\nNothing to process. Exiting.\n");
-  process.exit(0);
-}
-
-for (const file of files) {
-  if (!file.endsWith(".json")) continue;
-
-  const filePath = path.join(inputDir, file);
-  let bible;
-
-  // 🛡 Safe JSON parsing
+  // 1. Read
   try {
-    const raw = fs.readFileSync(filePath, "utf8");
-    bible = JSON.parse(raw);
+    bibleWrapper = readBibleFile(filePath);
   } catch (err) {
     invalidCount++;
-
-    let location = "";
-    if (err.message.includes("position")) {
-      const match = err.message.match(/position (\d+)/);
-      if (match) {
-        const pos = Number(match[1]);
-        const content = fs.readFileSync(filePath, "utf8");
-        const lines = content.slice(0, pos).split("\n");
-        const line = lines.length;
-        const column = lines[lines.length - 1].length + 1;
-        location = ` (line ${line}, column ${column})`;
-      }
-    }
-
-    const errorMsg =
-      `❌ Invalid JSON: ${file}${location}\n   → ${err.message}`;
-
-    console.error(errorMsg + "\n");
-    writeLog(errorMsg);
-    writeLog("");
-
-    continue; // ⬅️ move on to next file
+    logMessage(`❌ Skipped ${file}: ${err.message}`, "error");
+    continue;
   }
 
-  let bibleFixed = false;
-  const log = [];
+  // 2. Process
+  const bible = bibleWrapper.data; // Work on the inner data object
+  let bibleWasModified = false;
+  const fileLog = [];
 
   for (const book of bible.books || []) {
     for (const chapter of book.chapters || []) {
       const context = `${book.name} ${chapter.number}`;
-      const result = processVerses(chapter.verses || [], context, log);
+      const result = processVerses(chapter.verses || [], context, fileLog);
 
       if (result.fixed) {
         chapter.verses = result.verses;
-        bibleFixed = true;
+        bibleWasModified = true;
       }
     }
   }
 
-  function printGroupedLog(log) {
-    const grouped = [];
-
-    for (const entry of log) {
-      const last = grouped[grouped.length - 1];
-
-      if (
-        last &&
-        last.type === entry.type &&
-        last.context === entry.context &&
-        last.end + 1 === entry.start
-      ) {
-        // extend range
-        last.end = entry.end;
-      } else {
-        grouped.push({ ...entry });
-      }
-    }
-
-    for (const g of grouped) {
-      const label =
-        g.type === "empty"
-          ? "Empty verse"
-          : "Missing verses";
-
-      const range =
-        g.start === g.end ? g.start : `${g.start}-${g.end}`;
-
-    const line = `📌 ${label} ${range} at ${g.context}`;
-    console.log(line);
-    if (writeLog) writeLog(line);
-
-    }
-  }
-
-  if (bibleFixed) {
+  // 3. Log & Write
+  if (bibleWasModified) {
     fixedCount++;
+    const status = FLAGS.DRY_RUN ? "Needs fixing" : "Fixed";
+    logMessage(`📖 ${status}: ${file}`);
+    
+    logGroupedErrors(fileLog);
 
-    const header = `📖 ${DRY_RUN ? "Needs fixing" : "Fixed"}: ${file}`;
-    console.log(header);
-    writeLog(header);
-
-    printGroupedLog(log, writeLog);
-
-
-    if (!DRY_RUN) {
-      const outputName = `fixed${file}`;
-      const outputPath = path.join(outputDir, outputName);
-      fs.writeFileSync(
-        outputPath,
-        PRETTY ? JSON.stringify(bible, null, 2) : JSON.stringify(bible),
-        "utf8"
-      );
-
+    if (!FLAGS.DRY_RUN) {
+      const outputName = `fixed_${file}`; // distinct prefix
+      const outputPath = path.join(OUTPUT_DIR, outputName);
+      writeBibleFile(outputPath, bibleWrapper);
     }
-
-    console.log("");
+    logMessage(""); // Spacer
   }
 }
+
+// ===== 🏁 Summary =====
 
 const summary = `
 Done.
-📘 ${fixedCount} Bible(s) ${DRY_RUN ? "would need fixing" : "needed fixing"}
-⚠️  ${invalidCount} file(s) had invalid JSON and were skipped.
+📘 ${fixedCount} Bible(s) ${FLAGS.DRY_RUN ? "would need fixing" : "needed fixing"}
+⚠️ ${invalidCount} file(s) had invalid JSON/FSB and were skipped.
 🔎 Reminder: ${
-  DRY_RUN
+  FLAGS.DRY_RUN
     ? "These changes would affect verse ranges. Please double-check them against the original/reference Bible."
     : "These changes affected verse ranges. Please double-check them against the original/reference Bible."
 }
-🧾 Output format: ${PRETTY ? "Pretty-printed JSON" : "Compact JSON"}
 `;
 
-console.log(summary);
-writeLog(summary);
-
-if (WRITE_LOG && logLines.length) {
-  fs.writeFileSync(logFilePath, logLines.join("\n"), "utf8");
-  console.log(`📝 Log written to ${logFilePath}`);
-}
+logMessage(summary);
+flushLogs();
